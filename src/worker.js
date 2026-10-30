@@ -8,12 +8,13 @@ const HTML = `<!DOCTYPE html>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#0b1220;color:#eaf2ff;font:15px Arial,sans-serif}
-main{max-width:950px;margin:35px auto;padding:15px}
+main{max-width:950px;margin:30px auto;padding:15px}
 h1{color:#55d6a3;font-size:25px}
 h2{font-size:18px}
 .card{background:#142137;border:1px solid #293c56;border-radius:14px;padding:20px;margin:15px 0}
 input{background:#0b1729;border:1px solid #354b68;color:white;padding:12px;border-radius:8px;width:100%;margin:7px 0}
 button{background:#55d6a3;color:#062016;border:0;padding:11px 15px;border-radius:8px;font-weight:bold;margin:5px 3px;cursor:pointer}
+button:disabled{opacity:.5}
 button.danger{background:#a94350;color:white}
 button.gray{background:#344963;color:white}
 small{color:#a5b6ca}
@@ -33,17 +34,21 @@ td,th{text-align:left;padding:11px;border-bottom:1px solid #30415a;font-size:13p
 <section id="login" class="card">
 <h2>Admin Login</h2>
 <input id="password" type="password" placeholder="Admin password">
-<button onclick="login()">Login</button>
-<div id="loginMsg"></div>
+<button id="loginBtn" onclick="login()">Login</button>
+<div id="loginMsg" class="msg"></div>
 </section>
 
 <section id="panel" class="hidden">
+<div style="text-align:right">
+<button class="gray" onclick="logout()">Logout</button>
+</div>
+
 <div class="card">
 <h2>Generate Register Key</h2>
 <input id="label" maxlength="80" placeholder="Nama pengguna / label">
 <input id="expiry" type="datetime-local">
-<button onclick="createKey()">Generate Key</button>
-<div id="generated"></div>
+<button id="createBtn" onclick="createKey()">Generate Key</button>
+<div id="generated" class="msg"></div>
 </div>
 
 <div class="card">
@@ -51,191 +56,339 @@ td,th{text-align:left;padding:11px;border-bottom:1px solid #30415a;font-size:13p
 <button class="gray" onclick="loadKeys()">Refresh</button>
 <div class="wrap">
 <table>
-<thead><tr>
+<thead>
+<tr>
 <th>Label</th><th>Status</th><th>Device</th>
 <th>Expired</th><th>Aksi</th>
-</tr></thead>
+</tr>
+</thead>
 <tbody id="rows"></tbody>
 </table>
 </div>
-<div id="listMsg"></div>
+<div id="listMsg" class="msg"></div>
 </div>
 </section>
 </main>
+
 <script>
-async function api(path,method="GET",body=null){
- const r=await fetch(path,{
-  method,credentials:"same-origin",
-  headers:{"Content-Type":"application/json"},
-  body:body?JSON.stringify(body):undefined
- });
- const d=await r.json().catch(()=>({}));
- if(!r.ok)throw Error(d.error||"Request failed");
- return d;
+async function api(path,method="GET",data=null){
+ const options={
+  method,
+  credentials:"same-origin",
+  headers:{"Content-Type":"application/json"}
+ };
+ if(data!==null)options.body=JSON.stringify(data);
+
+ const response=await fetch(path,options);
+ const result=await response.json().catch(()=>({}));
+
+ if(response.status===401){
+  showLogin("Sesi admin berakhir. Silakan login kembali.");
+  throw Error("Unauthorized");
+ }
+
+ if(!response.ok){
+  throw Error(result.error||"Request failed");
+ }
+ return result;
 }
-function msg(id,text){document.getElementById(id).textContent=text}
+
+function showLogin(message=""){
+ document.getElementById("panel").classList.add("hidden");
+ document.getElementById("login").classList.remove("hidden");
+ document.getElementById("loginMsg").textContent=message;
+}
+
 async function login(){
+ const button=document.getElementById("loginBtn");
+ button.disabled=true;
+
  try{
-  await api("/api/admin-login","POST",{
-   password:document.getElementById("password").value
-  });
+  const password=document.getElementById("password").value;
+  await api("/api/admin-login","POST",{password});
+
   document.getElementById("password").value="";
   document.getElementById("login").classList.add("hidden");
   document.getElementById("panel").classList.remove("hidden");
-  loadKeys();
- }catch(e){msg("loginMsg",e.message)}
+
+  await loadKeys();
+ }catch(error){
+  document.getElementById("loginMsg").textContent=error.message;
+ }finally{
+  button.disabled=false;
+ }
 }
+
+async function logout(){
+ try{await api("/api/admin-logout","POST",{});}
+ catch(error){}
+ showLogin("Kamu sudah logout.");
+}
+
 async function createKey(){
+ const button=document.getElementById("createBtn");
+ const label=document.getElementById("label").value.trim();
+ const expiry=document.getElementById("expiry").value;
+
+ if(!label){
+  document.getElementById("generated").textContent="Isi nama pengguna / label terlebih dahulu.";
+  return;
+ }
+
+ button.disabled=true;
+ document.getElementById("generated").textContent="Membuat Register Key...";
+
  try{
-  const label=document.getElementById("label").value;
-  const expiry=document.getElementById("expiry").value;
-  const d=await api("/api/create-license","POST",{
-   label,expires_at:expiry?new Date(expiry).toISOString():null
+  const result=await api("/api/create-license","POST",{
+   label,
+   expires_at:expiry?new Date(expiry).toISOString():null
   });
+
   const box=document.getElementById("generated");
-  box.innerHTML="";
+  box.replaceChildren();
+
   const title=document.createElement("p");
   title.textContent="Register Key berhasil dibuat. Simpan sekarang:";
+
   const code=document.createElement("p");
   code.className="key";
-  code.textContent=d.key;
+  code.textContent=result.key;
+
   const copy=document.createElement("button");
   copy.textContent="Salin Key";
   copy.onclick=async()=>{
-   try{await navigator.clipboard.writeText(d.key);copy.textContent="Tersalin"}
-   catch{copy.textContent="Salin manual"}
+   try{
+    await navigator.clipboard.writeText(result.key);
+    copy.textContent="Tersalin";
+   }catch{
+    copy.textContent="Salin manual";
+   }
   };
+
   box.append(title,code,copy);
   document.getElementById("label").value="";
   document.getElementById("expiry").value="";
-  loadKeys();
- }catch(e){msg("generated",e.message)}
+  await loadKeys();
+ }catch(error){
+  document.getElementById("generated").textContent=error.message;
+ }finally{
+  button.disabled=false;
+ }
 }
+
 async function loadKeys(){
+ const rows=document.getElementById("rows");
+ document.getElementById("listMsg").textContent="Memuat lisensi...";
+
  try{
-  const d=await api("/api/licenses");
-  const rows=document.getElementById("rows");
+  const result=await api("/api/licenses");
   rows.replaceChildren();
-  for(const k of d.licenses){
+
+  for(const license of result.licenses){
    const tr=document.createElement("tr");
+
    const values=[
-    k.label||"-",
-    k.is_active?(k.device_hash?"Terikat":"Belum aktivasi"):"Nonaktif",
-    k.device_hash?"Terdaftar":"Kosong",
-    k.expires_at?new Date(k.expires_at).toLocaleString():"Tidak ada"
+    license.label||"-",
+    !license.is_active?"Nonaktif":
+     license.device_hash?"Terikat":"Belum aktivasi",
+    license.device_hash?"Terdaftar":"Kosong",
+    license.expires_at?
+     new Date(license.expires_at).toLocaleString():"Tidak ada"
    ];
-   for(const v of values){
+
+   for(const value of values){
     const td=document.createElement("td");
-    td.textContent=v;tr.append(td);
+    td.textContent=value;
+    tr.append(td);
    }
-   const action=document.createElement("td");
-   if(k.device_hash){
+
+   const actions=document.createElement("td");
+
+   if(license.device_hash){
     const reset=document.createElement("button");
-    reset.className="gray";reset.textContent="Reset Device";
-    reset.onclick=()=>resetDevice(k.id);
-    action.append(reset);
+    reset.className="gray";
+    reset.textContent="Reset Device";
+    reset.onclick=()=>resetDevice(license.id);
+    actions.append(reset);
    }
-   if(k.is_active){
+
+   if(license.is_active){
     const revoke=document.createElement("button");
-    revoke.className="danger";revoke.textContent="Revoke";
-    revoke.onclick=()=>revokeKey(k.id);
-    action.append(revoke);
+    revoke.className="danger";
+    revoke.textContent="Revoke";
+    revoke.onclick=()=>revokeKey(license.id);
+    actions.append(revoke);
    }
-   tr.append(action);rows.append(tr);
+
+   tr.append(actions);
+   rows.append(tr);
   }
-  if(!d.licenses.length){
+
+  if(!result.licenses.length){
    const tr=document.createElement("tr");
    const td=document.createElement("td");
-   td.colSpan=5;td.textContent="Belum ada lisensi";
-   tr.append(td);rows.append(tr);
+   td.colSpan=5;
+   td.textContent="Belum ada lisensi";
+   tr.append(td);
+   rows.append(tr);
   }
- }catch(e){msg("listMsg",e.message)}
+
+  document.getElementById("listMsg").textContent=
+   "Total lisensi: "+result.licenses.length;
+ }catch(error){
+  document.getElementById("listMsg").textContent=error.message;
+ }
 }
+
 async function resetDevice(id){
  if(!confirm("Lepaskan ikatan perangkat lisensi ini?"))return;
- try{await api("/api/reset-device","POST",{id});loadKeys()}
- catch(e){msg("listMsg",e.message)}
+ try{
+  await api("/api/reset-device","POST",{id});
+  await loadKeys();
+ }catch(error){
+  document.getElementById("listMsg").textContent=error.message;
+ }
 }
+
 async function revokeKey(id){
  if(!confirm("Nonaktifkan Register Key ini?"))return;
- try{await api("/api/revoke-license","POST",{id});loadKeys()}
- catch(e){msg("listMsg",e.message)}
+ try{
+  await api("/api/revoke-license","POST",{id});
+  await loadKeys();
+ }catch(error){
+  document.getElementById("listMsg").textContent=error.message;
+ }
 }
 </script>
 </body>
 </html>`;
 
-const json = (data, status=200, extra={}) =>
- new Response(JSON.stringify(data), {
+const json = (data,status=200,headers={}) =>
+ new Response(JSON.stringify(data),{
   status,
-  headers: {
-   "Content-Type":"application/json",
+  headers:{
+   "Content-Type":"application/json; charset=UTF-8",
    "Cache-Control":"no-store",
-   ...extra
+   ...headers
   }
- });
+});
 
-async function hash(value) {
- const result=await crypto.subtle.digest(
-  "SHA-256",new TextEncoder().encode(value)
- );
- return [...new Uint8Array(result)]
-  .map(x=>x.toString(16).padStart(2,"0")).join("");
+function base64url(bytes){
+ let binary="";
+ for(const byte of new Uint8Array(bytes)){
+  binary+=String.fromCharCode(byte);
+ }
+ return btoa(binary)
+  .replace(/\+/g,"-")
+  .replace(/\//g,"_")
+  .replace(/=+$/,"");
 }
 
-function b64url(bytes) {
- let s="";
- for(const b of new Uint8Array(bytes))s+=String.fromCharCode(b);
- return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+function decodeBase64url(value){
+ const normalized=value.replace(/-/g,"+").replace(/_/g,"/");
+ const padded=normalized+"=".repeat((4-normalized.length%4)%4);
+ const binary=atob(padded);
+ return Uint8Array.from(binary,c=>c.charCodeAt(0));
 }
 
-function unb64(value) {
- const s=atob(value.replace(/-/g,"+").replace(/_/g,"/")+"===");
- return Uint8Array.from(s,c=>c.charCodeAt(0));
-}
+async function createSession(secret){
+ const expires=Math.floor(Date.now()/1000)+28800;
 
-async function makeSession(secret) {
- const exp=Math.floor(Date.now()/1000)+28800;
  const key=await crypto.subtle.importKey(
-  "raw",new TextEncoder().encode(secret),
-  {name:"HMAC",hash:"SHA-256"},false,["sign"]
+  "raw",
+  new TextEncoder().encode(secret),
+  {name:"HMAC",hash:"SHA-256"},
+  false,
+  ["sign"]
  );
- const sig=await crypto.subtle.sign(
-  "HMAC",key,new TextEncoder().encode(String(exp))
+
+ const signature=await crypto.subtle.sign(
+  "HMAC",
+  key,
+  new TextEncoder().encode(String(expires))
  );
- return exp+"."+b64url(sig);
+
+ return expires+"."+base64url(signature);
 }
 
-function cookie(request) {
- const text=request.headers.get("Cookie")||"";
- const item=text.split(";").map(x=>x.trim())
-  .find(x=>x.startsWith("mr_admin="));
- return item?item.substring(9):"";
+function getCookie(request,name){
+ const cookies=request.headers.get("Cookie")||"";
+
+ for(const item of cookies.split(";")){
+  const part=item.trim();
+  const index=part.indexOf("=");
+
+  if(index<0)continue;
+
+  if(part.slice(0,index)===name){
+   return part.slice(index+1);
+  }
+ }
+ return "";
 }
 
-async function isAdmin(request,secret) {
- try {
-  const p=cookie(request).split(".");
-  if(p.length!==2)return false;
-  const exp=Number(p[0]);
-  if(!Number.isSafeInteger(exp)||exp<=Date.now()/1000)return false;
+async function verifySession(request,secret){
+ try{
+  const token=getCookie(request,"mr_admin");
+  const parts=token.split(".");
+
+  if(parts.length!==2)return false;
+
+  const expires=Number(parts[0]);
+
+  if(!Number.isSafeInteger(expires))return false;
+  if(expires<=Math.floor(Date.now()/1000))return false;
+
   const key=await crypto.subtle.importKey(
-   "raw",new TextEncoder().encode(secret),
-   {name:"HMAC",hash:"SHA-256"},false,["verify"]
+   "raw",
+   new TextEncoder().encode(secret),
+   {name:"HMAC",hash:"SHA-256"},
+   false,
+   ["verify"]
   );
+
   return await crypto.subtle.verify(
-   "HMAC",key,unb64(p[1]),new TextEncoder().encode(String(exp))
+   "HMAC",
+   key,
+   decodeBase64url(parts[1]),
+   new TextEncoder().encode(String(expires))
   );
- }catch{return false}
+ }catch(error){
+  console.error("Session verification failed:",error);
+  return false;
+ }
 }
 
-async function body(request) {
- try{return await request.json()}catch{return null}
+async function readBody(request){
+ try{
+  return await request.json();
+ }catch{
+  return null;
+ }
 }
 
-async function db(env,path,options={}) {
+async function sha256(value){
+ const digest=await crypto.subtle.digest(
+  "SHA-256",
+  new TextEncoder().encode(value)
+ );
+
+ return [...new Uint8Array(digest)]
+  .map(byte=>byte.toString(16).padStart(2,"0"))
+  .join("");
+}
+
+class DatabaseError extends Error{
+ constructor(status){
+  super("Database operation failed");
+  this.status=status;
+ }
+}
+
+async function db(env,path,options={}){
  const base=env.SUPABASE_URL.replace(/\/+$/,"");
- const r=await fetch(base+"/rest/v1/"+path,{
+
+ const response=await fetch(base+"/rest/v1/"+path,{
   ...options,
   headers:{
    apikey:env.SUPABASE_SECRET_KEY,
@@ -244,29 +397,60 @@ async function db(env,path,options={}) {
    ...(options.headers||{})
   }
  });
- if(!r.ok){
-  console.error("Supabase:",r.status,await r.text());
-  throw Error("Database operation failed");
+
+ if(!response.ok){
+  const detail=await response.text();
+  console.error("Supabase error:",response.status,detail);
+  throw new DatabaseError(response.status);
  }
- if(r.status===204)return null;
- return r.json();
+
+ const text=await response.text();
+ if(!text)return null;
+
+ try{
+  return JSON.parse(text);
+ }catch{
+  throw new Error("Invalid database response");
+ }
 }
 
-function makeRegisterKey(){
- const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function generateKey(){
+ const alphabet="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
  const bytes=crypto.getRandomValues(new Uint8Array(12));
- let groups=[];
- for(let g=0;g<3;g++){
-  let part="";
-  for(let i=0;i<4;i++)part+=chars[bytes[g*4+i]%chars.length];
-  groups.push(part);
+
+ const parts=[];
+ for(let group=0;group<3;group++){
+  let value="";
+  for(let i=0;i<4;i++){
+   value+=alphabet[bytes[group*4+i]%alphabet.length];
+  }
+  parts.push(value);
  }
- return "MR-"+groups.join("-");
+
+ return "MR-"+parts.join("-");
 }
 
 function validId(id){
  return typeof id==="string"&&
- /^[0-9a-f-]{36}$/i.test(id);
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+function configReady(env){
+ return Boolean(
+  env.SUPABASE_URL&&
+  env.SUPABASE_SECRET_KEY&&
+  env.ADMIN_PASSWORD&&
+  env.SESSION_SECRET
+ );
+}
+
+function sessionCookie(token){
+ return "mr_admin="+token+
+  "; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800";
+}
+
+function clearSessionCookie(){
+ return "mr_admin=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0";
 }
 
 export default {
@@ -276,10 +460,20 @@ export default {
   const method=request.method;
 
   try{
+   // Halaman utama
+   if(method==="GET"&&path==="/"){
+    return json({
+     status:"online",
+     service:"MetaRoot Register License",
+     version:"3.0"
+    });
+   }
+
+   // Dashboard admin
    if(method==="GET"&&path==="/admin"){
     return new Response(HTML,{
      headers:{
-      "Content-Type":"text/html;charset=UTF-8",
+      "Content-Type":"text/html; charset=UTF-8",
       "Cache-Control":"no-store",
       "X-Content-Type-Options":"nosniff",
       "Referrer-Policy":"no-referrer",
@@ -289,59 +483,90 @@ export default {
     });
    }
 
-   if(!env.SUPABASE_URL||!env.SUPABASE_SECRET_KEY||
-      !env.ADMIN_PASSWORD||!env.SESSION_SECRET){
+   // Login admin
+   if(method==="POST"&&path==="/api/admin-login"){
+    if(!env.ADMIN_PASSWORD||!env.SESSION_SECRET){
+     return json({error:"Admin configuration incomplete"},500);
+    }
+
+    const data=await readBody(request);
+
+    if(!data||typeof data.password!=="string"){
+     return json({error:"Invalid request"},400);
+    }
+
+    if(data.password!==env.ADMIN_PASSWORD){
+     return json({error:"Invalid credentials"},401);
+    }
+
+    const token=await createSession(env.SESSION_SECRET);
+
+    return json(
+     {success:true},
+     200,
+     {"Set-Cookie":sessionCookie(token)}
+    );
+   }
+
+   // Logout admin
+   if(method==="POST"&&path==="/api/admin-logout"){
+    return json(
+     {success:true},
+     200,
+     {"Set-Cookie":clearSessionCookie()}
+    );
+   }
+
+   // Pemeriksaan konfigurasi database
+   if(!configReady(env)){
     return json({error:"Server configuration incomplete"},500);
    }
 
-   if(method==="GET"&&path==="/"){
-    return json({
-     status:"online",
-     service:"MetaRoot Register License",
-     version:"2.0"
-    });
-   }
-
-   if(method==="POST"&&path==="/api/admin-login"){
-    const b=await body(request);
-    if(!b||typeof b.password!=="string")
-     return json({error:"Invalid request"},400);
-    if(b.password!==env.ADMIN_PASSWORD)
-     return json({error:"Invalid credentials"},401);
-    const session=await makeSession(env.SESSION_SECRET);
-    return json({success:true},200,{
-     "Set-Cookie":
-      "mr_admin="+session+"; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800"
-    });
-   }
-
-   // Aktivasi lisensi dari aplikasi MetaRoot
+   // Aktivasi Register Key dari aplikasi MetaRoot
    if(method==="POST"&&path==="/api/activate-license"){
-    const b=await body(request);
-    if(!b||typeof b.key!=="string"||
-       typeof b.device_hash!=="string"||
-       !/^[a-f0-9]{64}$/i.test(b.device_hash)){
-     return json({success:false,error:"Invalid registration data"},400);
+    const data=await readBody(request);
+
+    if(!data||
+       typeof data.key!=="string"||
+       typeof data.device_hash!=="string"||
+       !/^[a-f0-9]{64}$/i.test(data.device_hash)){
+     return json({
+      success:false,
+      error:"Invalid registration data"
+     },400);
     }
 
-    const keyHash=await hash(b.key.trim().toUpperCase());
+    const keyHash=await sha256(data.key.trim().toUpperCase());
+
     const params=new URLSearchParams({
      select:"id,label,is_active,expires_at,device_hash",
      key_hash:"eq."+keyHash,
      limit:"1"
     });
-    const rows=await db(env,"api_keys?"+params);
-    if(!rows.length)return json({success:false,error:"Invalid register key"},403);
 
-    const license=rows[0];
-    if(!license.is_active)
+    const licenses=await db(env,"api_keys?"+params);
+
+    if(!licenses||licenses.length===0){
+     return json({success:false,error:"Invalid register key"},403);
+    }
+
+    const license=licenses[0];
+
+    if(!license.is_active){
      return json({success:false,error:"License disabled"},403);
-    if(license.expires_at&&
-       new Date(license.expires_at).getTime()<=Date.now())
-     return json({success:false,error:"License expired"},403);
+    }
 
-    if(license.device_hash&&license.device_hash!==b.device_hash){
-     return json({success:false,error:"License already bound to another device"},403);
+    if(license.expires_at&&
+       new Date(license.expires_at).getTime()<=Date.now()){
+     return json({success:false,error:"License expired"},403);
+    }
+
+    if(license.device_hash&&
+       license.device_hash!==data.device_hash){
+     return json({
+      success:false,
+      error:"License already bound to another device"
+     },403);
     }
 
     if(!license.device_hash){
@@ -350,16 +575,21 @@ export default {
       device_hash:"is.null",
       is_active:"eq.true"
      });
+
      const updated=await db(env,"api_keys?"+updateParams,{
       method:"PATCH",
       headers:{Prefer:"return=representation"},
       body:JSON.stringify({
-       device_hash:b.device_hash,
+       device_hash:data.device_hash,
        bound_at:new Date().toISOString()
       })
      });
+
      if(!updated||updated.length!==1){
-      return json({success:false,error:"Activation conflict. Please retry."},409);
+      return json({
+       success:false,
+       error:"Activation conflict. Please retry."
+      },409);
      }
     }
 
@@ -371,93 +601,167 @@ export default {
     });
    }
 
-   const adminPaths=[
+   // Endpoint khusus admin
+   const adminRoutes=[
     "/api/create-license",
     "/api/licenses",
     "/api/reset-device",
     "/api/revoke-license"
    ];
-   if(adminPaths.includes(path)&&
-      !await isAdmin(request,env.SESSION_SECRET)){
-    return json({error:"Unauthorized"},401);
+
+   if(adminRoutes.includes(path)){
+    if(!env.SESSION_SECRET){
+     return json({error:"Session configuration incomplete"},500);
+    }
+
+    const authenticated=await verifySession(
+     request,
+     env.SESSION_SECRET
+    );
+
+    if(!authenticated){
+     return json({error:"Unauthorized"},401);
+    }
    }
 
+   // Generate Register Key
    if(method==="POST"&&path==="/api/create-license"){
-    const b=await body(request);
-    if(!b||typeof b.label!=="string"||
-       !b.label.trim()||b.label.trim().length>80){
-     return json({error:"Label must be 1-80 characters"},400);
-    }
-    let expires=null;
-    if(b.expires_at){
-     const d=new Date(b.expires_at);
-     if(Number.isNaN(d.getTime())||d.getTime()<=Date.now())
-      return json({error:"Invalid expiration date"},400);
-     expires=d.toISOString();
+    const data=await readBody(request);
+
+    if(!data||
+       typeof data.label!=="string"||
+       !data.label.trim()||
+       data.label.trim().length>80){
+     return json({
+      error:"Label must be 1-80 characters"
+     },400);
     }
 
-    // Retry if an extremely unlikely key collision occurs.
+    let expiresAt=null;
+
+    if(data.expires_at){
+     const date=new Date(data.expires_at);
+
+     if(Number.isNaN(date.getTime())||date.getTime()<=Date.now()){
+      return json({error:"Invalid expiration date"},400);
+     }
+
+     expiresAt=date.toISOString();
+    }
+
     for(let attempt=0;attempt<3;attempt++){
-     const key=makeRegisterKey();
-     const keyHash=await hash(key);
+     const key=generateKey();
+     const keyHash=await sha256(key);
+
      try{
       await db(env,"api_keys",{
        method:"POST",
        headers:{Prefer:"return=minimal"},
        body:JSON.stringify({
         key_hash:keyHash,
-        label:b.label.trim(),
+        label:data.label.trim(),
         is_active:true,
-        expires_at:expires,
+        expires_at:expiresAt,
         device_hash:null,
         bound_at:null
        })
       });
+
       return json({success:true,key},201);
-     }catch(e){
-      if(attempt===2)throw e;
+     }catch(error){
+      if(error instanceof DatabaseError&&error.status===409&&attempt<2){
+       continue;
+      }
+      throw error;
      }
     }
+
+    return json({error:"Could not generate unique key"},500);
    }
 
+   // Daftar lisensi
    if(method==="GET"&&path==="/api/licenses"){
     const params=new URLSearchParams({
      select:"id,label,is_active,expires_at,created_at,device_hash,bound_at",
      order:"created_at.desc"
     });
+
     const licenses=await db(env,"api_keys?"+params);
-    return json({success:true,licenses});
-   }
 
-   if(method==="POST"&&path==="/api/reset-device"){
-    const b=await body(request);
-    if(!b||!validId(b.id))
-     return json({error:"Invalid license ID"},400);
-    const params=new URLSearchParams({id:"eq."+b.id});
-    await db(env,"api_keys?"+params,{
-     method:"PATCH",
-     headers:{Prefer:"return=minimal"},
-     body:JSON.stringify({device_hash:null,bound_at:null})
+    return json({
+     success:true,
+     licenses:licenses||[]
     });
-    return json({success:true,message:"Device binding reset"});
    }
 
-   if(method==="POST"&&path==="/api/revoke-license"){
-    const b=await body(request);
-    if(!b||!validId(b.id))
+   // Reset ikatan perangkat
+   if(method==="POST"&&path==="/api/reset-device"){
+    const data=await readBody(request);
+
+    if(!data||!validId(data.id)){
      return json({error:"Invalid license ID"},400);
-    const params=new URLSearchParams({id:"eq."+b.id});
-    await db(env,"api_keys?"+params,{
+    }
+
+    const params=new URLSearchParams({
+     id:"eq."+data.id
+    });
+
+    const updated=await db(env,"api_keys?"+params,{
      method:"PATCH",
-     headers:{Prefer:"return=minimal"},
+     headers:{Prefer:"return=representation"},
+     body:JSON.stringify({
+      device_hash:null,
+      bound_at:null
+     })
+    });
+
+    if(!updated||updated.length===0){
+     return json({error:"License not found"},404);
+    }
+
+    return json({
+     success:true,
+     message:"Device binding reset"
+    });
+   }
+
+   // Nonaktifkan lisensi
+   if(method==="POST"&&path==="/api/revoke-license"){
+    const data=await readBody(request);
+
+    if(!data||!validId(data.id)){
+     return json({error:"Invalid license ID"},400);
+    }
+
+    const params=new URLSearchParams({
+     id:"eq."+data.id
+    });
+
+    const updated=await db(env,"api_keys?"+params,{
+     method:"PATCH",
+     headers:{Prefer:"return=representation"},
      body:JSON.stringify({is_active:false})
     });
-    return json({success:true,message:"License revoked"});
+
+    if(!updated||updated.length===0){
+     return json({error:"License not found"},404);
+    }
+
+    return json({
+     success:true,
+     message:"License revoked"
+    });
    }
 
    return json({error:"Not found"},404);
-  }catch(e){
-   console.error("Worker error:",e);
+
+  }catch(error){
+   console.error("Worker error:",error);
+
+   if(error instanceof DatabaseError){
+    return json({error:"Database operation failed"},500);
+   }
+
    return json({error:"Internal server error"},500);
   }
  }
